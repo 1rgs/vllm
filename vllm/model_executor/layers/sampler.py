@@ -1,15 +1,22 @@
 """A layer that samples the next tokens from the model's outputs."""
 from typing import Dict, List, Optional, Tuple
-
+import time
 import torch
 import torch.nn as nn
 
 from vllm.model_executor.input_metadata import InputMetadata
 from vllm.model_executor.parallel_utils.communication_op import (
-    tensor_model_parallel_all_gather)
+    tensor_model_parallel_all_gather,
+)
 from vllm.sampling_params import SamplingParams, SamplingType
-from vllm.sequence import (PromptLogprobs, SampleLogprobs, SamplerOutput,
-                           SequenceData, SequenceGroupOutputs, SequenceOutputs)
+from vllm.sequence import (
+    PromptLogprobs,
+    SampleLogprobs,
+    SamplerOutput,
+    SequenceData,
+    SequenceGroupOutputs,
+    SequenceOutputs,
+)
 
 _SAMPLING_EPS = 1e-5
 
@@ -40,46 +47,79 @@ class Sampler(nn.Module):
         input_metadata: InputMetadata,
         embedding_bias: Optional[torch.Tensor] = None,
     ) -> SamplerOutput:
+        start_time = time.time()  # Capture the start time
+
         # Get the hidden states that we use for sampling.
         hidden_states = _prune_hidden_states(hidden_states, input_metadata)
+        time1 = time.time()  # Capture time after pruning hidden states
+        print(
+            f"Time spent pruning hidden states: {time1 - start_time:.2f}s, {((time1 - start_time) / (time1 - start_time)) * 100:.2f}%"
+        )
 
         # Get the logits for the next tokens.
-        logits = _get_logits(hidden_states, embedding, embedding_bias,
-                             self.vocab_size)
+        logits = _get_logits(hidden_states, embedding, embedding_bias, self.vocab_size)
+        time2 = time.time()  # Capture time after getting logits
+        print(
+            f"Time spent getting logits: {time2 - time1:.2f}s, {((time2 - time1) / (time2 - start_time)) * 100:.2f}%"
+        )
 
         # Apply logits processors (if any).
         logits = _apply_logits_processors(logits, input_metadata)
+        time3 = time.time()  # Capture time after applying logits processors
+        print(
+            f"Time spent applying logits processors: {time3 - time2:.2f}s, {((time3 - time2) / (time3 - start_time)) * 100:.2f}%"
+        )
+
         # Apply presence and frequency penalties.
-        presence_penalties, frequency_penalties, repetition_penalties = (
-            _get_penalties(input_metadata))
+        presence_penalties, frequency_penalties, repetition_penalties = _get_penalties(
+            input_metadata
+        )
         assert len(presence_penalties) == logits.shape[0]
         assert len(frequency_penalties) == logits.shape[0]
         assert len(repetition_penalties) == logits.shape[0]
-        logits = _apply_penalties(logits, input_metadata, presence_penalties,
-                                  frequency_penalties, repetition_penalties)
+        logits = _apply_penalties(
+            logits,
+            input_metadata,
+            presence_penalties,
+            frequency_penalties,
+            repetition_penalties,
+        )
+        time4 = time.time()  # Capture time after applying penalties
+        print(
+            f"Time spent applying penalties: {time4 - time3:.2f}s, {((time4 - time3) / (time4 - start_time)) * 100:.2f}%"
+        )
 
         # Apply temperature scaling.
         temperatures = _get_temperatures(input_metadata)
         assert len(temperatures) == logits.shape[0]
         if any(t != 1.0 for t in temperatures):
-            t = torch.tensor(temperatures,
-                             dtype=logits.dtype,
-                             device=logits.device)
+            t = torch.tensor(temperatures, dtype=logits.dtype, device=logits.device)
             # Use in-place division to avoid creating a new tensor.
             logits.div_(t.unsqueeze(dim=1))
+        time5 = time.time()  # Capture time after temperature scaling
+        print(
+            f"Time spent on temperature scaling: {time5 - time4:.2f}s, {((time5 - time4) / (time5 - start_time)) * 100:.2f}%"
+        )
 
         # Apply top-p and top-k truncation.
-        top_ps, top_ks, min_ps = _get_top_p_top_k_min_p(
-            input_metadata, self.vocab_size)
+        top_ps, top_ks, min_ps = _get_top_p_top_k_min_p(input_metadata, self.vocab_size)
         assert len(top_ps) == len(top_ks) == logits.shape[0]
         do_top_p = any(p < 1.0 - _SAMPLING_EPS for p in top_ps)
         do_top_k = any(k != self.vocab_size for k in top_ks)
         if do_top_p or do_top_k:
             logits = _apply_top_p_top_k(logits, top_ps, top_ks)
+        time6 = time.time()  # Capture time after top-p and top-k truncation
+        print(
+            f"Time spent on top-p and top-k truncation: {time6 - time5:.2f}s, {((time6 - time5) / (time6 - start_time)) * 100:.2f}%"
+        )
 
         do_min_p = any(mp > _SAMPLING_EPS for mp in min_ps)
         if do_min_p:
             logits = _apply_min_p(logits, min_ps)
+        time7 = time.time()  # Capture time after min-p truncation
+        print(
+            f"Time spent on min-p truncation: {time7 - time6:.2f}s, {((time7 - time6) / (time7 - start_time)) * 100:.2f}%"
+        )
 
         # We use float32 for probabilities and log probabilities.
         # Compute the probabilities.
@@ -87,19 +127,43 @@ class Sampler(nn.Module):
         # Compute the log probabilities.
         # Use log_softmax to ensure numerical stability.
         logprobs = torch.log_softmax(logits, dim=-1, dtype=torch.float)
+        time8 = (
+            time.time()
+        )  # Capture time after computing probabilities and log probabilities
+        print(
+            f"Time spent on computing probabilities and log probabilities: {time8 - time7:.2f}s, {((time8 - time7) / (time8 - start_time)) * 100:.2f}%"
+        )
 
         # Sample the next tokens.
         sample_results = _sample(probs, logprobs, input_metadata)
         # Get the logprobs query results.
         prompt_logprobs, sample_logprobs = _get_logprobs(
-            logprobs, input_metadata, sample_results)
-        return _build_sampler_output(sample_results, input_metadata,
-                                     prompt_logprobs, sample_logprobs)
+            logprobs, input_metadata, sample_results
+        )
+        time9 = time.time()  # Capture time after sampling and getting logprobs
+        print(
+            f"Time spent on sampling and getting logprobs: {time9 - time8:.2f}s, {((time9 - time8) / (time9 - start_time)) * 100:.2f}%"
+        )
+
+        # Build the sampler output.
+        output = _build_sampler_output(
+            sample_results, input_metadata, prompt_logprobs, sample_logprobs
+        )
+        end_time = time.time()  # Capture the end time
+        print(
+            f"Time spent building sampler output: {end_time - time9:.2f}s, {((end_time - time9) / (end_time - start_time)) * 100:.2f}%"
+        )
+        print(f"Total time spent: {end_time - start_time:.2f}s")
+
+        return output
 
 
-def _get_logits(hidden_states: torch.Tensor, embedding: torch.Tensor,
-                embedding_bias: Optional[torch.Tensor],
-                vocab_size: int) -> torch.Tensor:
+def _get_logits(
+    hidden_states: torch.Tensor,
+    embedding: torch.Tensor,
+    embedding_bias: Optional[torch.Tensor],
+    vocab_size: int,
+) -> torch.Tensor:
     # Get the logits for the next tokens.
     logits = torch.matmul(hidden_states, embedding.t())
     if embedding_bias is not None:
@@ -119,7 +183,7 @@ def _prune_hidden_states(
 
 
 def _get_penalties(
-    input_metadata: InputMetadata
+    input_metadata: InputMetadata,
 ) -> Tuple[List[float], List[float], List[float]]:
     # Collect the presence and frequency penalties.
     presence_penalties: List[float] = []
@@ -130,8 +194,10 @@ def _get_penalties(
         p = sampling_params.presence_penalty
         f = sampling_params.frequency_penalty
         r = sampling_params.repetition_penalty
-        if (i < input_metadata.num_prompts
-                and sampling_params.prompt_logprobs is not None):
+        if (
+            i < input_metadata.num_prompts
+            and sampling_params.prompt_logprobs is not None
+        ):
             # NOTE: We do not apply presence and frequency penalties for the
             # prompt token positions where we don't sample new tokens.
             prompt_len = input_metadata.prompt_lens[i]
@@ -145,14 +211,16 @@ def _get_penalties(
 
 
 def _get_prompt_and_output_tokens(
-        input_metadata: InputMetadata
+    input_metadata: InputMetadata,
 ) -> Tuple[List[List[int]], List[List[int]]]:
     prompt_tokens: List[List[int]] = []
     output_tokens: List[List[int]] = []
     for i, seq_group in enumerate(input_metadata.seq_groups):
         seq_ids, sampling_params = seq_group
-        if (i < input_metadata.num_prompts
-                and sampling_params.prompt_logprobs is not None):
+        if (
+            i < input_metadata.num_prompts
+            and sampling_params.prompt_logprobs is not None
+        ):
             # NOTE: prompt token positions do not need output tokens to
             # compute penalties.
             prompt_len = input_metadata.prompt_lens[i]
@@ -175,15 +243,13 @@ def _get_bin_counts_and_mask(
     padded_tokens = [
         tokens + [vocab_size] * (max_len - len(tokens)) for tokens in tokens
     ]
-    tokens_tensor = torch.tensor(padded_tokens,
-                                 dtype=torch.long,
-                                 device=logits.device)
+    tokens_tensor = torch.tensor(padded_tokens, dtype=torch.long, device=logits.device)
 
     # Compute the bin counts for the tokens.
     # vocab_size + 1 for padding.
-    bin_counts = torch.zeros((num_seqs, vocab_size + 1),
-                             dtype=torch.long,
-                             device=logits.device)
+    bin_counts = torch.zeros(
+        (num_seqs, vocab_size + 1), dtype=torch.long, device=logits.device
+    )
     bin_counts.scatter_add_(1, tokens_tensor, torch.ones_like(tokens_tensor))
     bin_counts = bin_counts[:, :vocab_size]
     mask = bin_counts > 0
@@ -191,8 +257,9 @@ def _get_bin_counts_and_mask(
     return bin_counts, mask
 
 
-def _apply_logits_processors(logits: torch.Tensor,
-                             input_metadata: InputMetadata) -> torch.Tensor:
+def _apply_logits_processors(
+    logits: torch.Tensor, input_metadata: InputMetadata
+) -> torch.Tensor:
     logits_row_idx = 0
     found_logits_processors = False
     for seq_ids, sampling_params in input_metadata.seq_groups:
@@ -225,38 +292,43 @@ def _apply_penalties(
         p = presence_penalties[i]
         f = frequency_penalties[i]
         r = repetition_penalties[i]
-        if abs(p) < _SAMPLING_EPS and abs(f) < _SAMPLING_EPS and abs(
-                r - 1.0) < _SAMPLING_EPS:
+        if (
+            abs(p) < _SAMPLING_EPS
+            and abs(f) < _SAMPLING_EPS
+            and abs(r - 1.0) < _SAMPLING_EPS
+        ):
             continue
         break
     else:
         # Return early if all sequences have zero penalties.
         return logits
 
-    prompt_tokens, output_tokens = (
-        _get_prompt_and_output_tokens(input_metadata))
+    prompt_tokens, output_tokens = _get_prompt_and_output_tokens(input_metadata)
     assert len(prompt_tokens) == logits.shape[0]
     assert len(output_tokens) == logits.shape[0]
 
     prompt_bin_counts, prompt_mask = _get_bin_counts_and_mask(
-        logits, prompt_tokens, vocab_size, num_seqs)
+        logits, prompt_tokens, vocab_size, num_seqs
+    )
     output_bin_counts, output_mask = _get_bin_counts_and_mask(
-        logits, output_tokens, vocab_size, num_seqs)
+        logits, output_tokens, vocab_size, num_seqs
+    )
 
-    repetition_penalties = torch.tensor(repetition_penalties,
-                                        dtype=logits.dtype,
-                                        device=logits.device)
-    frequency_penalties = torch.tensor(frequency_penalties,
-                                       dtype=logits.dtype,
-                                       device=logits.device)
-    presence_penalties = torch.tensor(presence_penalties,
-                                      dtype=logits.dtype,
-                                      device=logits.device)
+    repetition_penalties = torch.tensor(
+        repetition_penalties, dtype=logits.dtype, device=logits.device
+    )
+    frequency_penalties = torch.tensor(
+        frequency_penalties, dtype=logits.dtype, device=logits.device
+    )
+    presence_penalties = torch.tensor(
+        presence_penalties, dtype=logits.dtype, device=logits.device
+    )
 
     repetition_penalties = repetition_penalties[:, None].repeat(1, vocab_size)
     repetition_penalties[~(prompt_mask | output_mask)] = 1.0
-    logits = torch.where(logits > 0, logits / repetition_penalties,
-                         logits * repetition_penalties)
+    logits = torch.where(
+        logits > 0, logits / repetition_penalties, logits * repetition_penalties
+    )
 
     # We follow the definition in OpenAI API.
     # Refer to https://platform.openai.com/docs/api-reference/parameter-details
@@ -276,8 +348,10 @@ def _get_temperatures(input_metadata: InputMetadata) -> List[float]:
             # (i.e., greedy sampling or beam search).
             # Set the temperature to 1 to avoid division by zero.
             temperature = 1.0
-        if (i < input_metadata.num_prompts
-                and sampling_params.prompt_logprobs is not None):
+        if (
+            i < input_metadata.num_prompts
+            and sampling_params.prompt_logprobs is not None
+        ):
             prompt_len = input_metadata.prompt_lens[i]
             temperatures += [temperature] * (prompt_len - 1)
         temperatures += [temperature] * len(seq_ids)
@@ -299,8 +373,10 @@ def _get_top_p_top_k_min_p(
         top_k = min(sampling_params.top_k, vocab_size)
         # k=-1 means no truncation.
         top_k = vocab_size if top_k == -1 else top_k
-        if (i < input_metadata.num_prompts
-                and sampling_params.prompt_logprobs is not None):
+        if (
+            i < input_metadata.num_prompts
+            and sampling_params.prompt_logprobs is not None
+        ):
             prompt_len = input_metadata.prompt_lens[i]
             top_ps += [top_p] * (prompt_len - 1)
             top_ks += [top_k] * (prompt_len - 1)
@@ -334,9 +410,7 @@ def _apply_top_p_top_k(
     logits_sort[top_k_mask] = -float("inf")
 
     # Re-sort the probabilities.
-    logits = torch.gather(logits_sort,
-                          dim=-1,
-                          index=torch.argsort(logits_idx, dim=-1))
+    logits = torch.gather(logits_sort, dim=-1, index=torch.argsort(logits_idx, dim=-1))
     return logits
 
 
@@ -368,8 +442,7 @@ def _greedy_sample(
     for seq_group in selected_seq_groups:
         seq_ids, _ = seq_group
         num_parent_seqs = len(seq_ids)
-        assert num_parent_seqs == 1, (
-            "Greedy sampling should have only one seq.")
+        assert num_parent_seqs == 1, "Greedy sampling should have only one seq."
         parent_ids = list(range(num_parent_seqs))
         next_token_ids = [samples[sample_idx].item()]
         results.append((next_token_ids, parent_ids))
@@ -389,9 +462,9 @@ def _random_sample(
         if is_prompt:
             seq_ids, sampling_params = seq_group
             max_best_of = max(max_best_of, sampling_params.best_of)
-    random_samples = torch.multinomial(probs,
-                                       num_samples=max_best_of,
-                                       replacement=True).cpu()
+    random_samples = torch.multinomial(
+        probs, num_samples=max_best_of, replacement=True
+    ).cpu()
     sample_idx = 0
     results = []
     for seq_group, is_prompt in zip(selected_seq_groups, is_prompts):
@@ -399,16 +472,17 @@ def _random_sample(
         num_parent_seqs = len(seq_ids)
         if is_prompt:
             # Prompt phase.
-            assert num_parent_seqs == 1, (
-                "Prompt input should have only one seq.")
+            assert num_parent_seqs == 1, "Prompt input should have only one seq."
             parent_ids = [0] * sampling_params.best_of
             next_token_ids = random_samples[
-                sample_idx, :sampling_params.best_of].tolist()
+                sample_idx, : sampling_params.best_of
+            ].tolist()
         else:
             # Generation phase.
             parent_ids = list(range(num_parent_seqs))
-            next_token_ids = random_samples[sample_idx:sample_idx +
-                                            num_parent_seqs, 0].tolist()
+            next_token_ids = random_samples[
+                sample_idx : sample_idx + num_parent_seqs, 0
+            ].tolist()
         results.append((next_token_ids, parent_ids))
         sample_idx += num_parent_seqs
     assert sample_idx == probs.size(0)
@@ -436,14 +510,12 @@ def _beam_search_sample(
         seq_ids, sampling_params = seq_group
         num_parent_seqs = len(seq_ids)
         beam_width = sampling_params.best_of
-        seq_group_logprobs = logprobs[sample_idx:sample_idx + num_parent_seqs]
+        seq_group_logprobs = logprobs[sample_idx : sample_idx + num_parent_seqs]
         if is_prompt:
             # Prompt phase.
-            assert num_parent_seqs == 1, (
-                "Prompt input should have only one seq.")
+            assert num_parent_seqs == 1, "Prompt input should have only one seq."
             parent_ids = [0] * (2 * beam_width)
-            _, next_token_ids = torch.topk(seq_group_logprobs[0],
-                                           2 * beam_width)
+            _, next_token_ids = torch.topk(seq_group_logprobs[0], 2 * beam_width)
             next_token_ids = next_token_ids.tolist()
         else:
             # Generation phase.
@@ -451,13 +523,12 @@ def _beam_search_sample(
                 seq_data[seq_id].cumulative_logprob for seq_id in seq_ids
             ]
             cumulative_logprobs = torch.tensor(
-                cumulative_logprobs,
-                dtype=torch.float,
-                device=seq_group_logprobs.device)
-            seq_group_logprobs = (seq_group_logprobs +
-                                  cumulative_logprobs.unsqueeze(dim=1))
-            _, topk_ids = torch.topk(seq_group_logprobs.flatten(),
-                                     2 * beam_width)
+                cumulative_logprobs, dtype=torch.float, device=seq_group_logprobs.device
+            )
+            seq_group_logprobs = seq_group_logprobs + cumulative_logprobs.unsqueeze(
+                dim=1
+            )
+            _, topk_ids = torch.topk(seq_group_logprobs.flatten(), 2 * beam_width)
             topk_ids = topk_ids.tolist()
             vocab_size = seq_group_logprobs.size(-1)
             parent_ids = [i // vocab_size for i in topk_ids]
@@ -494,13 +565,12 @@ def _sample(
             sample_results = _greedy_sample(seq_groups, category_logprobs)
         elif sampling_type == SamplingType.RANDOM:
             category_probs = probs[sample_indices]
-            sample_results = _random_sample(seq_groups, is_prompts,
-                                            category_probs)
+            sample_results = _random_sample(seq_groups, is_prompts, category_probs)
         elif sampling_type == SamplingType.BEAM:
             category_logprobs = logprobs[sample_indices]
-            sample_results = _beam_search_sample(seq_groups, is_prompts,
-                                                 input_metadata.seq_data,
-                                                 category_logprobs)
+            sample_results = _beam_search_sample(
+                seq_groups, is_prompts, input_metadata.seq_data, category_logprobs
+            )
         else:
             raise ValueError(f"Unsupported sampling type: {sampling_type}")
         sample_results_dict.update(zip(seq_group_ids, sample_results))
@@ -515,50 +585,53 @@ def _get_logprobs(
     logprobs: torch.Tensor,
     input_metadata: InputMetadata,
     sample_results: List[Tuple[List[int], List[int]]],
-) -> Tuple[List[Optional[List[Optional[Dict[int, float]]]]], List[List[Dict[
-        int, float]]]]:
+) -> Tuple[
+    List[Optional[List[Optional[Dict[int, float]]]]], List[List[Dict[int, float]]]
+]:
     # Prepare query indices
     batched_logprobs_query_seq_indices: List[int] = []
     batched_logprobs_query_token_indices: List[int] = []
     largest_num_logprobs = 0
     sample_idx = 0
     for i, (seq_group, sample_result) in enumerate(
-            zip(input_metadata.seq_groups, sample_results)):
+        zip(input_metadata.seq_groups, sample_results)
+    ):
         seq_ids, sampling_params = seq_group
         next_token_ids, parent_ids = sample_result
         num_parent_seqs = len(seq_ids)
-        if (i < input_metadata.num_prompts
-                and sampling_params.prompt_logprobs is not None):
-            largest_num_logprobs = max(largest_num_logprobs,
-                                       sampling_params.prompt_logprobs)
+        if (
+            i < input_metadata.num_prompts
+            and sampling_params.prompt_logprobs is not None
+        ):
+            largest_num_logprobs = max(
+                largest_num_logprobs, sampling_params.prompt_logprobs
+            )
             prompt_len = input_metadata.prompt_lens[i]
-            prompt_tokens = input_metadata.seq_data[
-                seq_ids[0]].prompt_token_ids
+            prompt_tokens = input_metadata.seq_data[seq_ids[0]].prompt_token_ids
             batched_logprobs_query_seq_indices.extend(
-                sample_idx + j for j in range(prompt_len - 1))
+                sample_idx + j for j in range(prompt_len - 1)
+            )
             batched_logprobs_query_token_indices.extend(
-                token_id for token_id in prompt_tokens[1:])
+                token_id for token_id in prompt_tokens[1:]
+            )
             sample_idx += prompt_len - 1
         batched_logprobs_query_seq_indices.extend(
-            [sample_idx + parent_id for parent_id in parent_ids])
+            [sample_idx + parent_id for parent_id in parent_ids]
+        )
         batched_logprobs_query_token_indices.extend(next_token_ids)
         if sampling_params.logprobs is not None:
-            largest_num_logprobs = max(largest_num_logprobs,
-                                       sampling_params.logprobs)
+            largest_num_logprobs = max(largest_num_logprobs, sampling_params.logprobs)
         sample_idx += num_parent_seqs
     assert sample_idx == logprobs.size(0)
 
     # Batched query for logprobs of selected token
-    batched_logprobs_query_result = logprobs[[
-        batched_logprobs_query_seq_indices,
-        batched_logprobs_query_token_indices
-    ]].cpu()
+    batched_logprobs_query_result = logprobs[
+        [batched_logprobs_query_seq_indices, batched_logprobs_query_token_indices]
+    ].cpu()
 
     # Batched query for logprobs of topk tokens
     if largest_num_logprobs > 0:
-        top_logprobs, top_token_ids = torch.topk(logprobs,
-                                                 largest_num_logprobs,
-                                                 dim=-1)
+        top_logprobs, top_token_ids = torch.topk(logprobs, largest_num_logprobs, dim=-1)
         top_logprobs = top_logprobs.cpu()
         top_token_ids = top_token_ids.cpu()
     else:
@@ -570,27 +643,31 @@ def _get_logprobs(
     sample_idx = 0
     query_result_idx = 0
     for i, (seq_group, sample_result) in enumerate(
-            zip(input_metadata.seq_groups, sample_results)):
+        zip(input_metadata.seq_groups, sample_results)
+    ):
         seq_ids, sampling_params = seq_group
         next_token_ids, parent_ids = sample_result
 
         # Prompt logprobs
-        if (i < input_metadata.num_prompts
-                and sampling_params.prompt_logprobs is not None):
+        if (
+            i < input_metadata.num_prompts
+            and sampling_params.prompt_logprobs is not None
+        ):
             num_logprobs = sampling_params.prompt_logprobs
             prompt_len = input_metadata.prompt_lens[i]
-            prompt_tokens = input_metadata.seq_data[
-                seq_ids[0]].prompt_token_ids
+            prompt_tokens = input_metadata.seq_data[seq_ids[0]].prompt_token_ids
             group_prompt_logprobs: PromptLogprobs = [None]
             for token_id in prompt_tokens[1:]:
                 prompt_logprobs_dict = {
-                    token_id:
-                    batched_logprobs_query_result[query_result_idx].item()
+                    token_id: batched_logprobs_query_result[query_result_idx].item()
                 }
                 if num_logprobs > 0:
                     prompt_logprobs_dict.update(
-                        zip(top_token_ids[sample_idx, :num_logprobs].tolist(),
-                            top_logprobs[sample_idx, :num_logprobs].tolist()))
+                        zip(
+                            top_token_ids[sample_idx, :num_logprobs].tolist(),
+                            top_logprobs[sample_idx, :num_logprobs].tolist(),
+                        )
+                    )
                 group_prompt_logprobs.append(prompt_logprobs_dict)
                 sample_idx += 1
                 query_result_idx += 1
@@ -605,17 +682,16 @@ def _get_logprobs(
         group_sample_logprobs: SampleLogprobs = []
         for next_token_id, parent_id in zip(next_token_ids, parent_ids):
             sample_logprobs_dict = {
-                next_token_id:
-                batched_logprobs_query_result[query_result_idx].item()
+                next_token_id: batched_logprobs_query_result[query_result_idx].item()
             }
             query_result_idx += 1
             if num_logprobs > 0:
                 sample_logprobs_dict.update(
                     zip(
-                        top_token_ids[sample_idx +
-                                      parent_id, :num_logprobs].tolist(),
-                        top_logprobs[sample_idx +
-                                     parent_id, :num_logprobs].tolist()))
+                        top_token_ids[sample_idx + parent_id, :num_logprobs].tolist(),
+                        top_logprobs[sample_idx + parent_id, :num_logprobs].tolist(),
+                    )
+                )
             group_sample_logprobs.append(sample_logprobs_dict)
         result_sample_logprobs.append(group_sample_logprobs)
         sample_idx += len(seq_ids)
@@ -630,18 +706,17 @@ def _build_sampler_output(
     sample_logprobs: List[SampleLogprobs],
 ) -> SamplerOutput:
     sampler_output = []
-    for (seq_group, sample_result, group_prompt_logprobs,
-         group_sample_logprobs) in zip(input_metadata.seq_groups,
-                                       sample_results, prompt_logprobs,
-                                       sample_logprobs):
+    for seq_group, sample_result, group_prompt_logprobs, group_sample_logprobs in zip(
+        input_metadata.seq_groups, sample_results, prompt_logprobs, sample_logprobs
+    ):
         seq_ids, _ = seq_group
         next_token_ids, parent_ids = sample_result
         seq_outputs = []
-        for parent_id, next_token_id, logprobs in zip(parent_ids,
-                                                      next_token_ids,
-                                                      group_sample_logprobs):
+        for parent_id, next_token_id, logprobs in zip(
+            parent_ids, next_token_ids, group_sample_logprobs
+        ):
             seq_outputs.append(
-                SequenceOutputs(seq_ids[parent_id], next_token_id, logprobs))
-        sampler_output.append(
-            SequenceGroupOutputs(seq_outputs, group_prompt_logprobs))
+                SequenceOutputs(seq_ids[parent_id], next_token_id, logprobs)
+            )
+        sampler_output.append(SequenceGroupOutputs(seq_outputs, group_prompt_logprobs))
     return sampler_output
