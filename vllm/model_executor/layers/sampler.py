@@ -115,9 +115,12 @@ class Sampler(nn.Module):
         sample_results = _sample(probs, logprobs, input_metadata)
         # Get the logprobs query results.
         times.append(time.time())  # Capture time after sampling
-        prompt_logprobs, sample_logprobs = _get_logprobs(
-            logprobs, input_metadata, sample_results
-        )
+        # prompt_logprobs, sample_logprobs = _get_logprobs(
+        #     logprobs, input_metadata, sample_results
+        # )
+        prompt_logprobs, sample_logprobs = [None] * len(input_metadata.seq_groups), [
+            None
+        ] * len(input_metadata.seq_groups)
         times.append(time.time())  # Capture time after getting logprobs
 
         # Build the sampler output.
