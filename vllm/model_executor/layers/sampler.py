@@ -435,7 +435,9 @@ def _greedy_sample(
     logprobs: torch.Tensor,
 ) -> List[Tuple[List[int], List[int]]]:
     start_s = time.time()
-    # samples = torch.argmax(logprobs, dim=-1).cpu()
+    # print shape of logprobs
+    print("logprobs.shape", logprobs.shape)
+    samples = torch.argmax(logprobs, dim=-1).cpu()
     end = time.time()
 
     print(f"Time spent on argmax: {end-start_s}s")
@@ -447,7 +449,7 @@ def _greedy_sample(
         num_parent_seqs = len(seq_ids)
         assert num_parent_seqs == 1, "Greedy sampling should have only one seq."
         parent_ids = list(range(num_parent_seqs))
-        next_token_ids = [3838]
+        next_token_ids = [samples[sample_idx].item()]
         results.append((next_token_ids, parent_ids))
         sample_idx += num_parent_seqs
         end = time.time()
