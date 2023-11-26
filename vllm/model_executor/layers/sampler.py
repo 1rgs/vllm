@@ -710,11 +710,11 @@ def _build_sampler_output(
         seq_ids, _ = seq_group
         next_token_ids, parent_ids = sample_result
         seq_outputs = []
-        for parent_id, next_token_id, logprobs in zip(
-            parent_ids, next_token_ids, group_sample_logprobs
+        for parent_id, next_token_id in zip(
+            parent_ids, next_token_ids
         ):
             seq_outputs.append(
-                SequenceOutputs(seq_ids[parent_id], next_token_id, logprobs)
+                SequenceOutputs(seq_ids[parent_id], next_token_id, {})
             )
         sampler_output.append(SequenceGroupOutputs(seq_outputs, group_prompt_logprobs))
     return sampler_output
