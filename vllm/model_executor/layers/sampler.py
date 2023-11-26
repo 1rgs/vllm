@@ -114,13 +114,16 @@ class Sampler(nn.Module):
         # Sample the next tokens.
         sample_results = _sample(probs, logprobs, input_metadata)
         # Get the logprobs query results.
-        # prompt_logprobs, sample_logprobs = _get_logprobs(
-        #     logprobs, input_metadata, sample_results
-        # )
-        times.append(time.time())  # Capture time after sampling and getting logprobs
+        times.append(time.time())  # Capture time after sampling
+        prompt_logprobs, sample_logprobs = _get_logprobs(
+            logprobs, input_metadata, sample_results
+        )
+        times.append(time.time())  # Capture time after getting logprobs
 
         # Build the sampler output.
-        output = _build_sampler_output(sample_results, input_metadata, [], [])
+        output = _build_sampler_output(
+            sample_results, input_metadata, prompt_logprobs, sample_logprobs
+        )
         times.append(time.time())  # Capture the end time
 
         # Now print the time and percentage information
@@ -134,7 +137,8 @@ class Sampler(nn.Module):
             "top-p and top-k truncation",
             "min-p truncation",
             "computing probabilities and log probabilities",
-            "sampling and getting logprobs",
+            "sampling",
+            "getting logprobs",
             "building sampler output",
         ]
         for i in range(1, len(times)):
@@ -697,11 +701,6 @@ def _build_sampler_output(
     sample_logprobs: List[SampleLogprobs],
 ) -> SamplerOutput:
     sampler_output = []
-
-    # make prompt_logprobs and sample_logprobs the same length as sample_results
-    prompt_logprobs = [None] * len(sample_results)
-    sample_logprobs = [[] for _ in range(len(sample_results))]
-
     for seq_group, sample_result, group_prompt_logprobs, group_sample_logprobs in zip(
         input_metadata.seq_groups, sample_results, prompt_logprobs, sample_logprobs
     ):
