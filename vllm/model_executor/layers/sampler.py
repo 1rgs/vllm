@@ -53,21 +53,21 @@ class Sampler(nn.Module):
         hidden_states = _prune_hidden_states(hidden_states, input_metadata)
         time1 = time.time()  # Capture time after pruning hidden states
         print(
-            f"Time spent pruning hidden states: {time1 - start_time:.2f}s, {((time1 - start_time) / (time1 - start_time)) * 100:.2f}%"
+            f"Time spent pruning hidden states: {time1 - start_time}s, {((time1 - start_time) / (time1 - start_time)) * 100}%"
         )
 
         # Get the logits for the next tokens.
         logits = _get_logits(hidden_states, embedding, embedding_bias, self.vocab_size)
         time2 = time.time()  # Capture time after getting logits
         print(
-            f"Time spent getting logits: {time2 - time1:.2f}s, {((time2 - time1) / (time2 - start_time)) * 100:.2f}%"
+            f"Time spent getting logits: {time2 - time1}s, {((time2 - time1) / (time2 - start_time)) * 100}%"
         )
 
         # Apply logits processors (if any).
         logits = _apply_logits_processors(logits, input_metadata)
         time3 = time.time()  # Capture time after applying logits processors
         print(
-            f"Time spent applying logits processors: {time3 - time2:.2f}s, {((time3 - time2) / (time3 - start_time)) * 100:.2f}%"
+            f"Time spent applying logits processors: {time3 - time2}s, {((time3 - time2) / (time3 - start_time)) * 100}%"
         )
 
         # Apply presence and frequency penalties.
@@ -86,7 +86,7 @@ class Sampler(nn.Module):
         )
         time4 = time.time()  # Capture time after applying penalties
         print(
-            f"Time spent applying penalties: {time4 - time3:.2f}s, {((time4 - time3) / (time4 - start_time)) * 100:.2f}%"
+            f"Time spent applying penalties: {time4 - time3}s, {((time4 - time3) / (time4 - start_time)) * 100}%"
         )
 
         # Apply temperature scaling.
@@ -98,7 +98,7 @@ class Sampler(nn.Module):
             logits.div_(t.unsqueeze(dim=1))
         time5 = time.time()  # Capture time after temperature scaling
         print(
-            f"Time spent on temperature scaling: {time5 - time4:.2f}s, {((time5 - time4) / (time5 - start_time)) * 100:.2f}%"
+            f"Time spent on temperature scaling: {time5 - time4}s, {((time5 - time4) / (time5 - start_time)) * 100}%"
         )
 
         # Apply top-p and top-k truncation.
@@ -110,7 +110,7 @@ class Sampler(nn.Module):
             logits = _apply_top_p_top_k(logits, top_ps, top_ks)
         time6 = time.time()  # Capture time after top-p and top-k truncation
         print(
-            f"Time spent on top-p and top-k truncation: {time6 - time5:.2f}s, {((time6 - time5) / (time6 - start_time)) * 100:.2f}%"
+            f"Time spent on top-p and top-k truncation: {time6 - time5}s, {((time6 - time5) / (time6 - start_time)) * 100}%"
         )
 
         do_min_p = any(mp > _SAMPLING_EPS for mp in min_ps)
@@ -118,7 +118,7 @@ class Sampler(nn.Module):
             logits = _apply_min_p(logits, min_ps)
         time7 = time.time()  # Capture time after min-p truncation
         print(
-            f"Time spent on min-p truncation: {time7 - time6:.2f}s, {((time7 - time6) / (time7 - start_time)) * 100:.2f}%"
+            f"Time spent on min-p truncation: {time7 - time6}s, {((time7 - time6) / (time7 - start_time)) * 100}%"
         )
 
         # We use float32 for probabilities and log probabilities.
@@ -131,7 +131,7 @@ class Sampler(nn.Module):
             time.time()
         )  # Capture time after computing probabilities and log probabilities
         print(
-            f"Time spent on computing probabilities and log probabilities: {time8 - time7:.2f}s, {((time8 - time7) / (time8 - start_time)) * 100:.2f}%"
+            f"Time spent on computing probabilities and log probabilities: {time8 - time7}s, {((time8 - time7) / (time8 - start_time)) * 100}%"
         )
 
         # Sample the next tokens.
@@ -142,7 +142,7 @@ class Sampler(nn.Module):
         )
         time9 = time.time()  # Capture time after sampling and getting logprobs
         print(
-            f"Time spent on sampling and getting logprobs: {time9 - time8:.2f}s, {((time9 - time8) / (time9 - start_time)) * 100:.2f}%"
+            f"Time spent on sampling and getting logprobs: {time9 - time8}s, {((time9 - time8) / (time9 - start_time)) * 100}%"
         )
 
         # Build the sampler output.
@@ -151,9 +151,9 @@ class Sampler(nn.Module):
         )
         end_time = time.time()  # Capture the end time
         print(
-            f"Time spent building sampler output: {end_time - time9:.2f}s, {((end_time - time9) / (end_time - start_time)) * 100:.2f}%"
+            f"Time spent building sampler output: {end_time - time9}s, {((end_time - time9) / (end_time - start_time)) * 100}%"
         )
-        print(f"Total time spent: {end_time - start_time:.2f}s")
+        print(f"Total time spent: {end_time - start_time}s")
 
         return output
 
