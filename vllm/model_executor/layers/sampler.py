@@ -47,28 +47,20 @@ class Sampler(nn.Module):
         input_metadata: InputMetadata,
         embedding_bias: Optional[torch.Tensor] = None,
     ) -> SamplerOutput:
-        start_time = time.time()  # Capture the start time
+        times = []  # List to hold the time at each checkpoint
+        times.append(time.time())  # Capture the start time
 
         # Get the hidden states that we use for sampling.
         hidden_states = _prune_hidden_states(hidden_states, input_metadata)
-        time1 = time.time()  # Capture time after pruning hidden states
-        print(
-            f"Time spent pruning hidden states: {time1 - start_time}s, {((time1 - start_time) / (time1 - start_time)) * 100}%"
-        )
+        times.append(time.time())  # Capture time after pruning hidden states
 
         # Get the logits for the next tokens.
         logits = _get_logits(hidden_states, embedding, embedding_bias, self.vocab_size)
-        time2 = time.time()  # Capture time after getting logits
-        print(
-            f"Time spent getting logits: {time2 - time1}s, {((time2 - time1) / (time2 - start_time)) * 100}%"
-        )
+        times.append(time.time())  # Capture time after getting logits
 
         # Apply logits processors (if any).
         logits = _apply_logits_processors(logits, input_metadata)
-        time3 = time.time()  # Capture time after applying logits processors
-        print(
-            f"Time spent applying logits processors: {time3 - time2}s, {((time3 - time2) / (time3 - start_time)) * 100}%"
-        )
+        times.append(time.time())  # Capture time after applying logits processors
 
         # Apply presence and frequency penalties.
         presence_penalties, frequency_penalties, repetition_penalties = _get_penalties(
@@ -84,10 +76,7 @@ class Sampler(nn.Module):
             frequency_penalties,
             repetition_penalties,
         )
-        time4 = time.time()  # Capture time after applying penalties
-        print(
-            f"Time spent applying penalties: {time4 - time3}s, {((time4 - time3) / (time4 - start_time)) * 100}%"
-        )
+        times.append(time.time())  # Capture time after applying penalties
 
         # Apply temperature scaling.
         temperatures = _get_temperatures(input_metadata)
@@ -96,10 +85,7 @@ class Sampler(nn.Module):
             t = torch.tensor(temperatures, dtype=logits.dtype, device=logits.device)
             # Use in-place division to avoid creating a new tensor.
             logits.div_(t.unsqueeze(dim=1))
-        time5 = time.time()  # Capture time after temperature scaling
-        print(
-            f"Time spent on temperature scaling: {time5 - time4}s, {((time5 - time4) / (time5 - start_time)) * 100}%"
-        )
+        times.append(time.time())  # Capture time after temperature scaling
 
         # Apply top-p and top-k truncation.
         top_ps, top_ks, min_ps = _get_top_p_top_k_min_p(input_metadata, self.vocab_size)
@@ -108,18 +94,12 @@ class Sampler(nn.Module):
         do_top_k = any(k != self.vocab_size for k in top_ks)
         if do_top_p or do_top_k:
             logits = _apply_top_p_top_k(logits, top_ps, top_ks)
-        time6 = time.time()  # Capture time after top-p and top-k truncation
-        print(
-            f"Time spent on top-p and top-k truncation: {time6 - time5}s, {((time6 - time5) / (time6 - start_time)) * 100}%"
-        )
+        times.append(time.time())  # Capture time after top-p and top-k truncation
 
         do_min_p = any(mp > _SAMPLING_EPS for mp in min_ps)
         if do_min_p:
             logits = _apply_min_p(logits, min_ps)
-        time7 = time.time()  # Capture time after min-p truncation
-        print(
-            f"Time spent on min-p truncation: {time7 - time6}s, {((time7 - time6) / (time7 - start_time)) * 100}%"
-        )
+        times.append(time.time())  # Capture time after min-p truncation
 
         # We use float32 for probabilities and log probabilities.
         # Compute the probabilities.
@@ -127,12 +107,9 @@ class Sampler(nn.Module):
         # Compute the log probabilities.
         # Use log_softmax to ensure numerical stability.
         logprobs = torch.log_softmax(logits, dim=-1, dtype=torch.float)
-        time8 = (
+        times.append(
             time.time()
         )  # Capture time after computing probabilities and log probabilities
-        print(
-            f"Time spent on computing probabilities and log probabilities: {time8 - time7}s, {((time8 - time7) / (time8 - start_time)) * 100}%"
-        )
 
         # Sample the next tokens.
         sample_results = _sample(probs, logprobs, input_metadata)
@@ -140,20 +117,36 @@ class Sampler(nn.Module):
         prompt_logprobs, sample_logprobs = _get_logprobs(
             logprobs, input_metadata, sample_results
         )
-        time9 = time.time()  # Capture time after sampling and getting logprobs
-        print(
-            f"Time spent on sampling and getting logprobs: {time9 - time8}s, {((time9 - time8) / (time9 - start_time)) * 100}%"
-        )
+        times.append(time.time())  # Capture time after sampling and getting logprobs
 
         # Build the sampler output.
         output = _build_sampler_output(
             sample_results, input_metadata, prompt_logprobs, sample_logprobs
         )
-        end_time = time.time()  # Capture the end time
-        print(
-            f"Time spent building sampler output: {end_time - time9}s, {((end_time - time9) / (end_time - start_time)) * 100}%"
-        )
-        print(f"Total time spent: {end_time - start_time}s")
+        times.append(time.time())  # Capture the end time
+
+        # Now print the time and percentage information
+        total_time = times[-1] - times[0]
+        section_names = [
+            "pruning hidden states",
+            "getting logits",
+            "applying logits processors",
+            "applying penalties",
+            "temperature scaling",
+            "top-p and top-k truncation",
+            "min-p truncation",
+            "computing probabilities and log probabilities",
+            "sampling and getting logprobs",
+            "building sampler output",
+        ]
+        for i in range(1, len(times)):
+            section_time = times[i] - times[i - 1]
+            section_percentage = (section_time / total_time) * 100
+            print(
+                f"Time spent on {section_names[i-1]}: {section_time:.2f}s, {section_percentage:.2f}% of total time"
+            )
+
+        print(f"Total time spent: {total_time:.2f}s")
 
         return output
 
