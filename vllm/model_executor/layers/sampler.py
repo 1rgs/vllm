@@ -148,10 +148,10 @@ class Sampler(nn.Module):
             section_time = times[i] - times[i - 1]
             section_percentage = (section_time / total_time) * 100
             print(
-                f"Time spent on {section_names[i-1]}: {section_time:.2f}s, {section_percentage:.2f}% of total time"
+                f"Time spent on {section_names[i-1]}: {section_time}s, {section_percentage}% of total time"
             )
 
-        print(f"Total time spent: {total_time:.2f}s")
+        print(f"Total time spent: {total_time}s")
 
         return output
 
@@ -551,6 +551,8 @@ def _sample(
 
     sample_results_dict: Dict[int, Tuple[List[int], List[int]]] = {}
     for sampling_type in SamplingType:
+        print("sampling_type", sampling_type)
+        start = time.time()
         seq_group_ids = categorized_seq_group_ids[sampling_type]
         seq_groups = [input_metadata.seq_groups[i] for i in seq_group_ids]
         is_prompts = [i < input_metadata.num_prompts for i in seq_group_ids]
@@ -572,6 +574,9 @@ def _sample(
         else:
             raise ValueError(f"Unsupported sampling type: {sampling_type}")
         sample_results_dict.update(zip(seq_group_ids, sample_results))
+        end = time.time()
+
+        print(f"Time spent on {sampling_type}: {end-start}s")
 
     sample_results = [
         sample_results_dict[i] for i in range(len(input_metadata.seq_groups))
@@ -710,11 +715,7 @@ def _build_sampler_output(
         seq_ids, _ = seq_group
         next_token_ids, parent_ids = sample_result
         seq_outputs = []
-        for parent_id, next_token_id in zip(
-            parent_ids, next_token_ids
-        ):
-            seq_outputs.append(
-                SequenceOutputs(seq_ids[parent_id], next_token_id, {})
-            )
+        for parent_id, next_token_id in zip(parent_ids, next_token_ids):
+            seq_outputs.append(SequenceOutputs(seq_ids[parent_id], next_token_id, {}))
         sampler_output.append(SequenceGroupOutputs(seq_outputs, group_prompt_logprobs))
     return sampler_output
