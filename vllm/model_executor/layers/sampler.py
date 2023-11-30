@@ -451,7 +451,7 @@ def _greedy_sample(
         argmax_value = torch.argmax(current_logprobs).cpu().item()
 
         parent_ids = list(range(num_parent_seqs))
-        next_token_ids = [argmax_value]
+        next_token_ids = [argmax_value, argmax_value, argmax_value]
         results.append((next_token_ids, parent_ids))
 
         sample_idx += num_parent_seqs
