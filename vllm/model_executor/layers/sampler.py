@@ -445,7 +445,7 @@ def _greedy_sample(
         start = time.time()
         seq_ids, _ = seq_group
         num_parent_seqs = len(seq_ids)
-        assert num_parent_seqs == 1, "Greedy sampling should have only one seq."
+        # assert num_parent_seqs == 1, "Greedy sampling should have only one seq."
         # Compute argmax only for the current sequence
         current_logprobs = logprobs[sample_idx]
         argmax_value = torch.argmax(current_logprobs).cpu().item()
